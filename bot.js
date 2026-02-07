@@ -30,11 +30,7 @@ module.exports = function (bot) {
     bot.answerCallbackQuery(query.id);
   });
 
-};    // رجوع للقائمة
-    if (data === "main_menu") {
-      return sendMainMenu(chatId);
-    }
-
+};
     // اختيار دولة
     if (data.startsWith("app_")) {
       const app = data.split("_")[1];
