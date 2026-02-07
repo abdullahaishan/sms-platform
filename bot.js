@@ -2,14 +2,16 @@ const TelegramBot = require("node-telegram-bot-api");
 const supabase = require("./db");
 const provider = require("./provider");
 
-const bot = new TelegramBot(process.env.BOT_TOKEN);
+// إيقاف polling لأنه Webhook
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
   await supabase.from("users").upsert({
     telegram_id: chatId,
-    username: msg.from.username
+    username: msg.from.username,
+    balance: 0
   });
 
   bot.sendMessage(chatId, "مرحباً بك في بوت الأرقام 🔥");
