@@ -1,144 +1,36 @@
-const TelegramBot = require("node-telegram-bot-api");
-const supabase = require("./db");
-const provider = require("./provider");
+module.exports = function (bot) {
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+  // عند /start
+  bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
 
-/* ================= HELPER FUNCTIONS ================= */
-
-async function checkSubscriptions(chatId) {
-  const { data: channels } = await supabase.from("channels").select("*");
-  if (!channels) return [];
-
-  const notJoined = [];
-
-  for (let channel of channels) {
-    try {
-      const member = await bot.getChatMember(channel.link, chatId);
-      if (["left", "kicked"].includes(member.status)) {
-        notJoined.push(channel);
+    bot.sendMessage(chatId, "مرحبا بك في البوت 🤖", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📱 طلب رقم", callback_data: "request_number" }],
+          [{ text: "💰 الأرقام المدفوعة", callback_data: "paid_numbers" }]
+        ]
       }
-    } catch (err) {
-      console.log("Subscription check error:", err.message);
-    }
-  }
-
-  return notJoined;
-}
-
-function generateKeyboard(buttons) {
-  return {
-    reply_markup: {
-      inline_keyboard: buttons.map(btn => [
-        { text: btn.text, callback_data: btn.data }
-      ])
-    }
-  };
-}
-
-/* ================= START COMMAND ================= */
-
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-
-  await supabase.from("users").upsert({
-    telegram_id: chatId,
-    username: msg.from.username,
-    balance: 0
+    });
   });
 
-  const notJoined = await checkSubscriptions(chatId);
+  // الأزرار
+  bot.on("callback_query", async (query) => {
+    const chatId = query.message.chat.id;
+    const data = query.data;
 
-  if (notJoined.length > 0) {
-    let text = `👋︙مرحباً بك ${msg.from.first_name}\n\n☑️︙يجب عليك الإشتراك بالقنوات التالية:\n`;
-
-    for (let ch of notJoined) {
-      text += `• ${ch.name}: ${ch.link}\n`;
+    if (data === "request_number") {
+      bot.sendMessage(chatId, "جاري تجهيز رقم لك...");
     }
 
-    return bot.sendMessage(
-      chatId,
-      text,
-      generateKeyboard([
-        { text: "تحقق من انضمامي ✅", data: "check_channels" }
-      ])
-    );
-  }
-
-  return sendMainMenu(chatId);
-});
-
-/* ================= MAIN MENU ================= */
-
-async function sendMainMenu(chatId) {
-  const { data: user } = await supabase
-    .from("users")
-    .select("*")
-    .eq("telegram_id", chatId)
-    .single();
-
-  const text = `👋︙مرحباً بك في بوت خدمات مجانية | Free Number 📲
-
-💰︙رصيدك : ${user?.balance || 0} ريال يمني
-🎛︙رقم حسابك : ${chatId}
-
-🤖︙دعم البوت : @abdullah_aishan`;
-
-  return bot.sendMessage(
-    chatId,
-    text,
-    generateKeyboard([
-      { text: "اختيار الرقم 📱", data: "choose_app" },
-      { text: "قسم API 🔗", data: "api_section" },
-      { text: "الدعم 🛠", data: "support" }
-    ])
-  );
-}
-
-/* ================= CALLBACK HANDLER ================= */
-
-bot.on("callback_query", async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-
-  try {
-    // تحقق الاشتراك
-    if (data === "check_channels") {
-      const notJoined = await checkSubscriptions(chatId);
-
-      if (notJoined.length > 0) {
-        let text = `☑️︙لا زلت لم تنضم لهذه القنوات:\n`;
-        for (let ch of notJoined) {
-          text += `• ${ch.name}: ${ch.link}\n`;
-        }
-
-        return bot.sendMessage(
-          chatId,
-          text,
-          generateKeyboard([
-            { text: "تحقق مرة اخرى ✅", data: "check_channels" }
-          ])
-        );
-      }
-
-      return sendMainMenu(chatId);
+    if (data === "paid_numbers") {
+      bot.sendMessage(chatId, "لا توجد أرقام مدفوعة حالياً.");
     }
 
-    // اختيار التطبيق
-    if (data === "choose_app") {
-      return bot.sendMessage(
-        chatId,
-        "🤖︙اختر التطبيق:",
-        generateKeyboard([
-          { text: "واتساب 📱", data: "app_whatsapp" },
-          { text: "تليجرام ✈️", data: "app_telegram" },
-          { text: "فيسبوك 📘", data: "app_facebook" },
-          { text: "العودة ↩️", data: "main_menu" }
-        ])
-      );
-    }
+    bot.answerCallbackQuery(query.id);
+  });
 
-    // رجوع للقائمة
+};    // رجوع للقائمة
     if (data === "main_menu") {
       return sendMainMenu(chatId);
     }
