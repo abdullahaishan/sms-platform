@@ -1,72 +1,33 @@
 require("dotenv").config();
 const express = require("express");
+const TelegramBot = require("node-telegram-bot-api");
 
 const app = express();
 app.use(express.json());
 
-// استيراد البوت من ملف bot.js
-const bot = require("./bot");
+const bot = new TelegramBot(process.env.BOT_TOKEN, { webHook: true });
 
-// إعداد Webhook
-const WEBHOOK_URL = process.env.WEBHOOK_URL + "/webhook";
+const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL;
 
-bot.setWebHook(WEBHOOK_URL)
-  .then(() => console.log("✅ Webhook set successfully"))
-  .catch(err => {
-    console.error("❌ Webhook error:", err.message);
-    console.log("⚠️  Trying to delete webhook first...");
-    return bot.deleteWebHook().then(() => {
-      console.log("🗑️  Old webhook deleted, retrying...");
-      return bot.setWebHook(WEBHOOK_URL);
-    });
-  })
-  .then(() => console.log("✅ Webhook set after retry"))
-  .catch(err => console.error("❌ Failed to set webhook:", err.message));
+bot.setWebHook(`${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
 
-// Webhook endpoint
-app.post("/webhook", (req, res) => {
-  try {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-  } catch (error) {
-    console.error("Webhook processing error:", error);
-    res.sendStatus(500);
-  }
+app.post(`/bot${process.env.BOT_TOKEN}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
 });
 
-// Health check endpoint
 app.get("/", (req, res) => {
-  res.json({ 
-    status: "running", 
-    service: "Telegram Bot",
-    timestamp: new Date().toISOString()
-  });
+  res.send("Bot is running 🚀");
 });
 
-// Health endpoint for monitoring
 app.get("/health", (req, res) => {
-  res.json({ 
-    status: "healthy", 
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
-  });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error("Server error:", err.stack);
-  res.status(500).json({ error: "Internal server error" });
-});
+require("./bot")(bot);
 
-// Handle 404
-app.use((req, res) => {
-  res.status(404).json({ error: "Route not found" });
-});
-
-// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📞 Webhook URL: ${WEBHOOK_URL}`);
-  console.log(`👤 Bot username: ${process.env.BOT_USERNAME || 'Not set'}`);
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Webhook URL: ${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
 });
