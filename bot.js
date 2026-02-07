@@ -7,7 +7,25 @@ module.exports = (bot) => {
   console.log("🤖 Bot module loaded successfully");
 
   /* ==================== دوال المساعدة ==================== */
-  
+  async function isAdmin(chatId) {
+  // 1. check env list
+  if (process.env.ADMIN_IDS) {
+    const ids = process.env.ADMIN_IDS.split(",").map(x => x.trim());
+    if (ids.includes(String(chatId))) return true;
+  }
+  // 2. check DB flag
+  try {
+    const { data } = await supabase
+      .from("users")
+      .select("is_admin")
+      .eq("telegram_id", chatId)
+      .single();
+    return data?.is_admin === true;
+  } catch (err) {
+    console.error("isAdmin check error:", err.message);
+    return false;
+  }
+  }
   // إنشاء كيبورد إنلاين
   function createInlineKeyboard(buttons, columns = 2) {
     const keyboard = [];
