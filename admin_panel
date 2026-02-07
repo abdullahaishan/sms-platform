@@ -1,0 +1,29 @@
+module.exports = function(bot, supabase) {
+  const ADMIN_IDS = [123456789]; // ضع Telegram ID الخاص بك كمشرف
+
+  async function isAdmin(chatId) {
+    return ADMIN_IDS.includes(chatId);
+  }
+
+  bot.on("callback_query", async (query) => {
+    const chatId = query.message.chat.id;
+    const data = query.data;
+
+    if (data === "admin_panel") {
+      if (!(await isAdmin(chatId))) {
+        return bot.sendMessage(chatId, "❌ ليس لديك صلاحيات للوصول للوحة التحكم");
+      }
+
+      const keyboard = [
+        [{ text: "إدارة القنوات", callback_data: "manage_channels" }],
+        [{ text: "إدارة المستخدمين", callback_data: "manage_users" }],
+        [{ text: "إضافة أرقام مدفوعة", callback_data: "add_paid_number" }],
+        [{ text: "عرض الطلبات", callback_data: "view_orders" }],
+        [{ text: "العودة ↩️", callback_data: "main_menu" }]
+      ];
+      return bot.sendMessage(chatId, "💻 لوحة التحكم:", { reply_markup: { inline_keyboard: keyboard } });
+    }
+
+    // بقية خيارات الإدارة يمكن تطويرها لاحقاً بنفس الأسلوب
+  });
+};
