@@ -1,52 +1,61 @@
 const axios = require("axios");
-
 const PROVIDER_KEY = process.env.PROVIDER_KEY;
-const PROVIDER_URL = process.env.PROVIDER_URL;
+const PROVIDER_URL = process.env.PROVIDER_URL; // https://numbros.shop/jj/tele
+const PROVIDER_ID = process.env.PROVIDER_ID; // optional
 
-// استرجاع قائمة الدول وعدد الأرقام المتاحة لكل تطبيق
+function buildUrl(path, params = {}) {
+  const url = new URL(`${PROVIDER_URL}/${path}`);
+  url.searchParams.set('key', PROVIDER_KEY);
+  if (PROVIDER_ID) url.searchParams.set('from_id', PROVIDER_ID);
+  Object.keys(params).forEach(k => url.searchParams.set(k, params[k]));
+  return url.toString();
+}
+
 async function getCountries(app) {
   try {
-    const res = await axios.get(`${PROVIDER_URL}/countries.json`);
-    const countries = res.data || [];
-    // نضيف عدد الأرقام لكل دولة حسب التطبيق
-    const result = await Promise.all(
-      countries.map(async (c) => {
-        let available = 0;
-        try {
-          const nums = await axios.get(`${PROVIDER_URL}/numbers/${app}/${c.key}.txt`);
-          available = nums.data.split("\n").filter(x => x).length;
-        } catch (err) { available = 0; }
-        return { name: c.name, key: c.key, available };
-      })
-    );
-    return result;
+    const url = buildUrl('countries.json'); // adjust if actual endpoint differs
+    const res = await axios.get(url);
+    // Normalize to [{ name, key, available }] depending on API structure
+    // If your provider has different structure, adapt parsing here
+    const list = [];
+    if (Array.isArray(res.data)) return res.data;
+    // if object map
+    for (const k in res.data) {
+      list.push({ name: k, key: k, available: res.data[k].count || 0 });
+    }
+    return list;
   } catch (err) {
-    console.log("Error getCountries:", err);
+    console.error("provider.getCountries error:", err.message);
     return [];
   }
 }
 
-// طلب رقم جديد
 async function getNumber(countryKey, app) {
   try {
-    const url = `${PROVIDER_URL}/GetNumber.php?key=${PROVIDER_KEY}&from_id=0&country=${countryKey}&app=${app}`;
+    const url = buildUrl('GetNumber.php', { country: countryKey, app });
     const res = await axios.get(url);
-    return res.data.number || res.data; // حسب ما يرجعه المزود
+    // provider may return plain text, JSON, or encoded response — handle flexibly:
+    if (res.data && typeof res.data === 'object') {
+      // common case: { number: '...' }
+      return res.data.number || res.data;
+    }
+    // if string like "NO" or "123456789"
+    return String(res.data);
   } catch (err) {
-    console.log("Error getNumber:", err);
+    console.error("provider.getNumber error:", err.message);
     return null;
   }
 }
 
-// طلب الكود/الرسالة
 async function getSms(number) {
   try {
-    const url = `${PROVIDER_URL}/GetSms.php?key=${PROVIDER_KEY}&from_id=0&number=${number}`;
+    const url = buildUrl('GetSms.php', { number });
     const res = await axios.get(url);
-    return res.data.sms || res.data;
+    if (res.data && typeof res.data === 'object') return res.data.sms || res.data;
+    return String(res.data);
   } catch (err) {
-    console.log("Error getSms:", err);
-    return "لا توجد رسالة حتى الآن";
+    console.error("provider.getSms error:", err.message);
+    return null;
   }
 }
 
