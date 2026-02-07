@@ -12,8 +12,15 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 require("./bot")(bot);
 
 // سيرفر بسيط لـ Render
-app.get("/", (req, res) => {
-  res.send("Bot is running...");
+app.get("/webhook-info", async (req, res) => {
+  try {
+    // بعض نسخ المكتبة تستخدم getWebHookInfo أو getWebhookInfo
+    const info = bot.getWebHookInfo ? await bot.getWebHookInfo() :
+                 bot.getWebhookInfo ? await bot.getWebhookInfo() : null;
+    res.json(info || { error: "getWebhookInfo not supported by this lib version" });
+  } catch (error) {
+    res.json({ error: error.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
