@@ -1,10 +1,10 @@
 const TelegramBot = require("node-telegram-bot-api");
-const supabase = require("./db");
-const provider = require("./provider");
+const supabase = require("./db"); // ملف اتصال Supabase
+const provider = require("./provider"); // ملف للتعامل مع المزود القديم
 
-// إيقاف polling لأنه Webhook
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
 
+// رسالة الترحيب مع أزرار
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
@@ -14,19 +14,59 @@ bot.onText(/\/start/, async (msg) => {
     balance: 0
   });
 
-  bot.sendMessage(chatId, "مرحباً بك في بوت الأرقام 🔥");
+  const welcomeText = "مرحباً بك في بوت الأرقام 🔥\nاختر ما تريد من الأزرار:";
+
+  const keyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "رصيدي 💰", callback_data: "balance" }],
+        [{ text: "طلب رقم 📱", callback_data: "get_number" }],
+        [{ text: "جلب الرسالة ✉️", callback_data: "get_sms" }]
+      ]
+    }
+  };
+
+  bot.sendMessage(chatId, welcomeText, keyboard);
 });
 
+// التعامل مع الضغط على الأزرار
+bot.on("callback_query", async (callbackQuery) => {
+  const msg = callbackQuery.message;
+  const chatId = msg.chat.id;
+  const data = callbackQuery.data;
+
+  if (data === "balance") {
+    const { data: user } = await supabase
+      .from("users")
+      .select("balance")
+      .eq("telegram_id", chatId)
+      .single();
+
+    bot.sendMessage(chatId, `رصيدك الحالي: ${user?.balance || 0}`);
+  }
+
+  if (data === "get_number") {
+    bot.sendMessage(chatId, "أرسل الدولة والتطبيق بهذا الشكل:\n`COUNTRY,APP`", { parse_mode: "Markdown" });
+  }
+
+  if (data === "get_sms") {
+    bot.sendMessage(chatId, "أرسل الرقم للحصول على الرسالة بهذا الشكل:\n`/sms <NUMBER>`", { parse_mode: "Markdown" });
+  }
+
+  bot.answerCallbackQuery(callbackQuery.id);
+});
+
+// أوامر نصية تقليدية
 bot.onText(/\/balance/, async (msg) => {
   const chatId = msg.chat.id;
 
-  const { data } = await supabase
+  const { data: user } = await supabase
     .from("users")
     .select("balance")
     .eq("telegram_id", chatId)
     .single();
 
-  bot.sendMessage(chatId, `رصيدك الحالي: ${data?.balance || 0}`);
+  bot.sendMessage(chatId, `رصيدك الحالي: ${user?.balance || 0}`);
 });
 
 bot.onText(/\/number (.+)/, async (msg, match) => {
