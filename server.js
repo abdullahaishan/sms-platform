@@ -5,29 +5,82 @@ const TelegramBot = require("node-telegram-bot-api");
 const app = express();
 app.use(express.json());
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { webHook: true });
+// إنشاء البوت
+const bot = new TelegramBot(process.env.BOT_TOKEN, {
+  polling: false,
+  webHook: true
+});
 
-const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL;
+// تأكد من وجود URL
+const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL || `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
 
-bot.setWebHook(`${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
+console.log("🔧 Setting webhook to:", `${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
 
+// إعداد Webhook
+bot.setWebHook(`${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`)
+  .then(() => console.log("✅ Webhook set successfully"))
+  .catch(err => console.error("❌ Webhook error:", err.message));
+
+// مسار Webhook
 app.post(`/bot${process.env.BOT_TOKEN}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
+  try {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("Error processing update:", error);
+    res.sendStatus(500);
+  }
 });
 
+// صفحة الرئيسية
 app.get("/", (req, res) => {
-  res.send("Bot is running 🚀");
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>📱 Telegram Bot</title>
+      <style>
+        body { font-family: Arial; text-align: center; padding: 50px; }
+        h1 { color: #0088cc; }
+        .status { background: #28a745; color: white; padding: 10px; border-radius: 5px; }
+      </style>
+    </head>
+    <body>
+      <h1>🤖 Telegram Bot is Running</h1>
+      <div class="status">🚀 Status: Active</div>
+      <p>Bot is ready to receive messages</p>
+    </body>
+    </html>
+  `);
 });
 
+// Health check
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({
+    status: "healthy",
+    service: "Telegram SMS Bot",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
 });
 
+// Webhook info
+app.get("/webhook-info", async (req, res) => {
+  try {
+    const info = await bot.getWebHookInfo();
+    res.json(info);
+  } catch (error) {
+    res.json({ error: error.message });
+  }
+});
+
+// بدء البوت
 require("./bot")(bot);
 
+// بدء السيرفر
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Webhook URL: ${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Webhook URL: ${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
+  console.log(`🤖 Bot started successfully`);
 });
