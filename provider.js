@@ -7,24 +7,41 @@ const KEY = process.env.PROVIDER_KEY;
 async function getCountries(appCode) {
   try {
     const res = await axios.get(`${BASE_URL}/countries.json`);
-    const countriesData = res.data; // مصفوفة الدول
+    const countriesObj = res.data;
 
-    // فلترة الدول حسب التطبيق إذا كانت هناك علاقة
-    let appMap = {};
-    try {
-      const mapRes = await axios.get(`${BASE_URL}/app_map.json`);
-      appMap = mapRes.data; // { whatsapp: ["PH", "US", ...], telegram: [...], facebook: [...] }
-    } catch {
-      console.log("App map not found or error");
+    // تحويل object إلى array
+    const countriesList = Object.keys(countriesObj).map(key => ({
+      key,
+      name: countriesObj[key]
+    }));
+
+    // الآن نتحقق من توفر الأرقام لكل دولة (بالتطبيق)
+    const availableCountries = [];
+
+    for (let country of countriesList) {
+      try {
+        // جلب ملف الأرقام، نحاول حسب التطبيق
+        const numbersUrl = `${BASE_URL}/numbers/${appCode}/${country.key}.txt`;
+        const numbersRes = await axios.get(numbersUrl);
+
+        // إذا كانت الاستجابة ليست خطأ وتحتوي على نص غير فارغ
+        if (numbersRes.data && numbersRes.data.trim().length > 0) {
+          // نحسب عدد الأرقام (كل سطر رقم)
+          const count = numbersRes.data
+            .trim()
+            .split("\n")
+            .filter(n => n.trim().length > 0).length;
+
+          availableCountries.push({
+            key: country.key,
+            name: country.name,
+            available: count
+          });
+        }
+      } catch (err) {
+        // لا نفعل شيء إذا لم يفتح الملف → لا توجد أرقام
+      }
     }
-
-    const availableCountries = countriesData
-      .filter(c => !appMap[appCode] || appMap[appCode].includes(c.key))
-      .map(c => ({
-        key: c.key,
-        name: c.name,
-        available: c.available || "متوفر"
-      }));
 
     return availableCountries;
   } catch (err) {
