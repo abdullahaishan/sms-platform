@@ -1,20 +1,29 @@
 require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
-const supabase = require("./db"); // قاعدة البيانات الجديدة
-const provider = require("./provider"); // مزود الأرقام القديم
+const provider = require("./provider"); // المزود القديم
+const supabase = require("./db"); // اتصال قاعدة Supabase
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 // ------------------- HELPER FUNCTIONS -------------------
+function generateKeyboard(options) {
+  return {
+    reply_markup: {
+      inline_keyboard: options.map(opt => [{ text: opt.text, callback_data: opt.data }])
+    }
+  };
+}
 
+// التحقق من الاشتراك بالقنوات
 async function checkSubscriptions(chatId) {
   const { data: channels } = await supabase.from("channels").select("*");
   const notJoined = [];
-
-  for (let ch of channels) {
+  for (let channel of channels) {
     try {
-      const member = await bot.getChatMember(ch.link, chatId);
-      if (["left", "kicked"].includes(member.status)) notJoined.push(ch);
+      const member = await bot.getChatMember(channel.link, chatId);
+      if (["left", "kicked"].includes(member.status)) {
+        notJoined.push(channel);
+      }
     } catch (err) {
       console.log("Error checking subscription:", err.message);
     }
@@ -22,42 +31,38 @@ async function checkSubscriptions(chatId) {
   return notJoined;
 }
 
-function generateKeyboard(options) {
-  return {
-    reply_markup: {
-      inline_keyboard: options.map(opt => [opt])
-    }
-  };
-}
-
 // ------------------- START COMMAND -------------------
-
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
+  // حفظ أو تحديث المستخدم في Supabase
   await supabase.from("users").upsert({
     telegram_id: chatId,
     username: msg.from.username,
     balance: 0
   });
 
+  // التحقق من الاشتراك بالقنوات
   const notJoined = await checkSubscriptions(chatId);
 
   if (notJoined.length > 0) {
     let text = `👋︙مرحباً بك ${msg.from.first_name}\n\n`;
-    text += `☑️︙يجب عليك الإشتراك بالقنوات التالية لتتمكن من استعمال البوت:\n\n`;
+    text += `☑️︙يجب عليك الإشتراك بالقنوات التالية لتتمكن من استعمال البوت:\n`;
     for (let ch of notJoined) text += `• ${ch.name}: ${ch.link}\n`;
 
-    return bot.sendMessage(chatId, text, generateKeyboard([{ text: "تحقق من انضمامي ✅", callback_data: "check_channels" }]));
+    return bot.sendMessage(chatId, text, generateKeyboard([{ text: "تحقق من انضمامي ✅", data: "check_channels" }]));
   }
 
   sendMainMenu(chatId);
 });
 
 // ------------------- MAIN MENU -------------------
-
 async function sendMainMenu(chatId) {
-  const { data: user } = await supabase.from("users").select("*").eq("telegram_id", chatId).single();
+  const { data: user } = await supabase
+    .from("users")
+    .select("*")
+    .eq("telegram_id", chatId)
+    .single();
 
   const text = `👋︙مرحباً بك في بوت خدمات مجانية | Free Number 📲\n\n` +
     `💰︙رصيدك : ${user.balance || 0} ريال يمني\n` +
@@ -65,23 +70,19 @@ async function sendMainMenu(chatId) {
     `🤖︙دعم البوت : @abdullah_aishan`;
 
   const keyboard = [
-    { text: "اختيار الرقم 📱", callback_data: "choose_app" },
-    { text: "قسم API 🔗", callback_data: "api_section" },
-    { text: "الدعم 🛠", callback_data: "support" },
-    { text: "القائمة الرئيسية 🏠", callback_data: "main_menu" }
+    { text: "اختيار الرقم 📱", data: "choose_app" },
+    { text: "قسم API 🔗", data: "api_section" },
+    { text: "الدعم 🛠", data: "support" },
+    { text: "القائمة الرئيسية 🏠", data: "main_menu" }
   ];
 
   bot.sendMessage(chatId, text, generateKeyboard(keyboard));
 }
 
 // ------------------- CALLBACK HANDLER -------------------
-
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
-  const msgId = query.message.message_id;
   const data = query.data;
-
-  await bot.answerCallbackQuery(query.id);
 
   // ------------------- CHECK CHANNELS -------------------
   if (data === "check_channels") {
@@ -89,11 +90,7 @@ bot.on("callback_query", async (query) => {
     if (notJoined.length > 0) {
       let text = `☑️︙لا زلت لم تنضم لهذه القنوات:\n`;
       for (let ch of notJoined) text += `• ${ch.name}: ${ch.link}\n`;
-      return bot.editMessageText(text, {
-        chat_id: chatId,
-        message_id: msgId,
-        reply_markup: { inline_keyboard: [[{ text: "تحقق مرة اخرى ✅", callback_data: "check_channels" }]] }
-      });
+      return bot.sendMessage(chatId, text, generateKeyboard([{ text: "تحقق مرة اخرى ✅", data: "check_channels" }]));
     }
     return sendMainMenu(chatId);
   }
@@ -103,97 +100,63 @@ bot.on("callback_query", async (query) => {
 
   // ------------------- CHOOSE APP -------------------
   if (data === "choose_app") {
-    const text = `🤖︙اختر التطبيق:`;
     const keyboard = [
-      { text: "واتساب 📱", callback_data: "app_whatsapp" },
-      { text: "تليجرام ✈️", callback_data: "app_telegram" },
-      { text: "فيسبوك 📘", callback_data: "app_facebook" },
-      { text: "العودة ↩️", callback_data: "main_menu" }
+      { text: "واتساب 📱", data: "app_whatsapp" },
+      { text: "تليجرام ✈️", data: "app_telegram" },
+      { text: "فيسبوك 📘", data: "app_facebook" },
+      { text: "العودة ↩️", data: "main_menu" }
     ];
-    return bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: msgId,
-      reply_markup: { inline_keyboard: keyboard.map(k => [k]) }
-    });
+    return bot.sendMessage(chatId, `🤖︙اختر التطبيق:`, generateKeyboard(keyboard));
   }
 
   // ------------------- SELECT APP -------------------
   if (data.startsWith("app_")) {
     const app = data.split("_")[1];
-    let countries = [];
-    try {
-      countries = await provider.getCountries(app);
-    } catch (err) {
-      console.log("Error fetching countries:", err.message);
-      return bot.sendMessage(chatId, "❌ حدث خطأ عند جلب الدول.");
+    const countries = await provider.getCountries(app, chatId);
+
+    if (countries.length === 0) {
+      return bot.sendMessage(chatId, "⚠️︙لا توجد أرقام متاحة حالياً لهذا التطبيق", generateKeyboard([{ text: "العودة ↩️", data: "choose_app" }]));
     }
 
-    const text = `🌍︙اختر الدولة لطلب الرقم (${app}):`;
     const keyboard = countries.map(c => ({
       text: `${c.name} (${c.available})`,
-      callback_data: `country_${app}_${c.key}`
+      data: `country_${app}_${c.key}`
     }));
-    keyboard.push({ text: "العودة ↩️", callback_data: "choose_app" });
+    keyboard.push({ text: "العودة ↩️", data: "choose_app" });
 
-    return bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: msgId,
-      reply_markup: { inline_keyboard: keyboard.map(k => [k]) }
-    });
+    return bot.sendMessage(chatId, "🌍︙اختر الدولة لطلب الرقم:", generateKeyboard(keyboard));
   }
 
   // ------------------- SELECT COUNTRY -------------------
   if (data.startsWith("country_")) {
-    const [_, app, countryKey] = data.split("_");
-    let number;
-    try {
-      number = await provider.getNumber(countryKey, app);
-    } catch (err) {
-      console.log("Error fetching number:", err.message);
-      return bot.sendMessage(chatId, "❌ حدث خطأ عند طلب الرقم.");
-    }
+    const parts = data.split("_");
+    const app = parts[1];
+    const countryKey = parts[2];
 
-    // حفظ الطلب بالقاعدة الجديدة (معلومات المستخدم فقط)
-    const { data: user } = await supabase.from("users").select("*").eq("telegram_id", chatId).single();
-    await supabase.from("orders").insert({
-      user_id: user.id,
-      number,
-      country: countryKey,
-      app_code: app,
-      status: "waiting"
-    });
+    // طلب رقم جديد
+    const number = await provider.getNumber(app, countryKey, chatId);
 
     const text = `☑️︙تم شراء رقم جديد بنجاح\n\n` +
-                 `🌐︙الدولة: ${countryKey}\n` +
-                 `🕹︙التطبيق: ${app}\n` +
-                 `☎️︙الرقم: ${number}\n` +
-                 `⏳︙مدة الانتظار لوصول الكود: دقيقتين تقريباً\n` +
-                 `💵︙السعر: 0 ريال يمني`;
+      `🌐︙الدولة: ${countryKey}\n` +
+      `🕹︙التطبيق: ${app}\n` +
+      `☎️︙الرقم: ${number}\n` +
+      `💵︙السعر: 0 ريال يمني\n` +
+      `🎲︙انقر على (طلب الكود) بعد دقائق ليصلك الكود`;
 
     const keyboard = [
-      { text: "تغيير الرقم 🔄", callback_data: `country_${app}_${countryKey}` },
-      { text: "طلب الكود 📨", callback_data: `get_code_${number}` },
-      { text: "العودة ↩️", callback_data: "choose_app" },
-      { text: "القائمة الرئيسية 🏠", callback_data: "main_menu" }
+      { text: "تغيير الرقم 🔄", data: `country_${app}_${countryKey}` },
+      { text: "طلب الكود 📨", data: `get_code_${number}` },
+      { text: "العودة ↩️", data: "choose_app" },
+      { text: "القائمة الرئيسية 🏠", data: "main_menu" }
     ];
 
-    return bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: msgId,
-      reply_markup: { inline_keyboard: keyboard.map(k => [k]) }
-    });
+    return bot.sendMessage(chatId, text, generateKeyboard(keyboard));
   }
 
   // ------------------- GET CODE -------------------
   if (data.startsWith("get_code_")) {
     const number = data.replace("get_code_", "");
-    let sms;
-    try {
-      sms = await provider.getSms(number);
-    } catch (err) {
-      console.log("Error fetching SMS:", err.message);
-      return bot.sendMessage(chatId, "❌ حدث خطأ عند جلب الرسالة.");
-    }
+    const sms = await provider.getSms(number, chatId);
     return bot.sendMessage(chatId, `✉️︙الرسالة:\n${sms}`);
   }
 
@@ -206,6 +169,8 @@ bot.on("callback_query", async (query) => {
   if (data === "api_section") {
     return bot.sendMessage(chatId, "قسم API سيتم تطويره لاحقًا.");
   }
+
+  bot.answerCallbackQuery(query.id);
 });
 
 module.exports = bot;
