@@ -1,58 +1,93 @@
 const axios = require("axios");
 
-const BASE_URL = process.env.PROVIDER_URL; // https://numbros.shop/jj/tele
-const KEY = process.env.PROVIDER_KEY;       // مفتاح المزود
+const BASE_URL = "https://numbros.shop/jj";
+const KEY = process.env.PROVIDER_KEY;
 
-// استرجاع الدول المتاحة
-async function getCountries() {
-  const url = "https://numbros.shop/jj/countries.json";
-  const res = await axios.get(url);
-  return res.data; // [{ key: "PH", name: "Philippines", available: 10 }, ...]
+// ------------------- GET COUNTRIES -------------------
+async function getCountries(appCode) {
+  try {
+    const res = await axios.get(`${BASE_URL}/countries.json`);
+    const countriesData = res.data; // مصفوفة الدول
+
+    // فلترة الدول حسب التطبيق إذا كانت هناك علاقة
+    let appMap = {};
+    try {
+      const mapRes = await axios.get(`${BASE_URL}/app_map.json`);
+      appMap = mapRes.data; // { whatsapp: ["PH", "US", ...], telegram: [...], facebook: [...] }
+    } catch {
+      console.log("App map not found or error");
+    }
+
+    const availableCountries = countriesData
+      .filter(c => !appMap[appCode] || appMap[appCode].includes(c.key))
+      .map(c => ({
+        key: c.key,
+        name: c.name,
+        available: c.available || "متوفر"
+      }));
+
+    return availableCountries;
+  } catch (err) {
+    console.log("Error fetching countries:", err.message);
+    return [];
+  }
 }
 
-// استرجاع التطبيقات
-async function getAppMap() {
-  const url = "https://numbros.shop/jj/app_map.json";
-  const res = await axios.get(url);
-  return res.data; // { whatsapp: "WhatsApp", telegram: "Telegram", ... }
+// ------------------- GET NUMBER -------------------
+async function getNumber(country, app) {
+  try {
+    const res = await axios.get(`${BASE_URL}/tele/GetNumber.php`, {
+      params: {
+        key: KEY,
+        country,
+        app
+      }
+    });
+    return res.data.number || res.data; // بعض الأحيان الاستجابة تحتوي على {number: "123"}
+  } catch (err) {
+    console.log("Error fetching number:", err.message);
+    throw err;
+  }
 }
 
-// استرجاع الأسعار
+// ------------------- GET SMS -------------------
+async function getSms(number) {
+  try {
+    const res = await axios.get(`${BASE_URL}/tele/GetSms.php`, {
+      params: {
+        key: KEY,
+        number
+      }
+    });
+    return res.data.sms || res.data; // بعض الأحيان الاستجابة تحتوي على {sms: "1234"}
+  } catch (err) {
+    console.log("Error fetching SMS:", err.message);
+    throw err;
+  }
+}
+
+// ------------------- GET BALANCE -------------------
+async function getBalance() {
+  try {
+    const res = await axios.get(`${BASE_URL}/tele/GetBalance.php`, {
+      params: { key: KEY }
+    });
+    return res.data.balance || res.data; // {balance: 100} أو عدد مباشر
+  } catch (err) {
+    console.log("Error fetching balance:", err.message);
+    throw err;
+  }
+}
+
+// ------------------- GET PRICES (OPTIONAL) -------------------
 async function getPrices() {
-  const url = "https://numbros.shop/jj/prices.json";
-  const res = await axios.get(url);
-  return res.data; // { "PH": { "whatsapp": 5, "telegram": 3 }, ... }
+  try {
+    const res = await axios.get(`${BASE_URL}/prices.json`);
+    return res.data; // { PH: { whatsapp: 10, telegram: 8 }, US: { whatsapp: 12 } }
+  } catch (err) {
+    console.log("Error fetching prices:", err.message);
+    return {};
+  }
 }
 
-// طلب رقم جديد
-async function getNumber(from_id, country, app) {
-  const url = `${BASE_URL}/GetNumber.php?key=${KEY}&from_id=${from_id}&country=${country}&app=${app}`;
-  const res = await axios.get(url);
-  // استخرج الرقم من النص
-  const match = res.data.match(/: (\d+)/);
-  const number = match ? match[1] : null;
-  return { raw: res.data, number };
-}
-
-// طلب الكود (SMS)
-async function getSms(from_id, number) {
-  const url = `${BASE_URL}/GetSms.php?key=${KEY}&from_id=${from_id}&number=${number}`;
-  const res = await axios.get(url);
-  return res.data;
-}
-
-// معرفة الرصيد
-async function getBalance(from_id) {
-  const url = `${BASE_URL}/GetBalance.php?key=${KEY}&from_id=${from_id}`;
-  const res = await axios.get(url);
-  return res.data;
-}
-
-module.exports = {
-  getNumber,
-  getSms,
-  getBalance,
-  getCountries,
-  getAppMap,
-  getPrices
-};
+module.exports = { getCountries, getNumber, getSms, getBalance, getPrices };
