@@ -1,214 +1,179 @@
-const supabase = require("./db");
-const provider = require("./provider");
+const TelegramBot = require("node-telegram-bot-api");
+const supabase = require("./db"); // اتصال Supabase
+const provider = require("./provider"); // المزود القديم
 
-module.exports = (bot) => {
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-  /* ================== أدوات مساعدة ================== */
+// ------------------- HELPER FUNCTIONS -------------------
+async function checkSubscriptions(chatId) {
+  const { data: channels } = await supabase
+    .from("channels")
+    .select("*");
 
-  function inline(buttons) {
-    return {
-      reply_markup: {
-        inline_keyboard: buttons
+  const notJoined = [];
+  for (let channel of channels) {
+    try {
+      const member = await bot.getChatMember(channel.link, chatId);
+      if (["left", "kicked"].includes(member.status)) {
+        notJoined.push(channel);
       }
-    };
+    } catch (err) {
+      console.log("Error checking subscription:", err);
+    }
+  }
+  return notJoined;
+}
+
+function generateKeyboard(options) {
+  return {
+    reply_markup: {
+      inline_keyboard: options.map(opt => [{ text: opt.text, callback_data: opt.data }])
+    }
+  };
+}
+
+// ------------------- START -------------------
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  await supabase.from("users").upsert({
+    telegram_id: chatId,
+    username: msg.from.username,
+    balance: 0
+  });
+
+  const notJoined = await checkSubscriptions(chatId);
+  if (notJoined.length > 0) {
+    let text = `👋︙مرحباً بك ${msg.from.first_name}\n\n`;
+    text += `☑️︙يجب عليك الإشتراك بالقنوات التالية:\n`;
+    for (let ch of notJoined) text += `• ${ch.name}: ${ch.link}\n`;
+
+    return bot.sendMessage(chatId, text, generateKeyboard([{ text: "تحقق من انضمامي ✅", data: "check_channels" }]));
   }
 
-  async function getUser(telegramId, username) {
-    let { data: user } = await supabase
+  sendMainMenu(chatId);
+});
+
+// ------------------- MAIN MENU -------------------
+async function sendMainMenu(chatId) {
+  const { data: user } = await supabase
+    .from("users")
+    .select("*")
+    .eq("telegram_id", chatId)
+    .single();
+
+  const text = `👋︙مرحباً بك في بوت الأرقام المجانية 📲\n\n` +
+    `💰︙رصيدك : ${user.balance || 0} ريال يمني\n` +
+    `🎛︙رقم حسابك : ${chatId}\n\n` +
+    `🤖︙دعم البوت : @abdullah_aishan`;
+
+  const keyboard = [
+    { text: "اختيار الرقم 📱", data: "choose_app" },
+    { text: "قسم API 🔗", data: "api_section" },
+    { text: "الدعم 🛠", data: "support" },
+    { text: "القائمة الرئيسية 🏠", data: "main_menu" }
+  ];
+
+  bot.sendMessage(chatId, text, generateKeyboard(keyboard));
+}
+
+// ------------------- CALLBACK -------------------
+bot.on("callback_query", async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+
+  if (data === "check_channels") {
+    const notJoined = await checkSubscriptions(chatId);
+    if (notJoined.length > 0) {
+      let text = `☑️︙لا زلت لم تنضم لهذه القنوات:\n`;
+      for (let ch of notJoined) text += `• ${ch.name}: ${ch.link}\n`;
+      return bot.sendMessage(chatId, text, generateKeyboard([{ text: "تحقق مرة اخرى ✅", data: "check_channels" }]));
+    }
+    return sendMainMenu(chatId);
+  }
+
+  if (data === "main_menu") return sendMainMenu(chatId);
+
+  // ------------------- اختيار التطبيق -------------------
+  if (data === "choose_app") {
+    const apps = await provider.getAppMap();
+    const keyboard = Object.entries(apps).map(([key, name]) => ({ text: name, data: `app_${key}` }));
+    keyboard.push({ text: "العودة ↩️", data: "main_menu" });
+    return bot.sendMessage(chatId, "🤖︙اختر التطبيق:", generateKeyboard(keyboard));
+  }
+
+  // ------------------- اختيار التطبيق المحدد -------------------
+  if (data.startsWith("app_")) {
+    const app = data.split("_")[1];
+    const countries = await provider.getCountries();
+    const prices = await provider.getPrices();
+
+    const keyboard = countries.map(c => {
+      const price = prices[c.key]?.[app] || 0;
+      return { text: `${c.name} (${c.available} متوفر) - ${price} ريال`, data: `country_${app}_${c.key}` };
+    });
+
+    keyboard.push({ text: "العودة ↩️", data: "choose_app" });
+    return bot.sendMessage(chatId, "🌍︙اختر الدولة لطلب الرقم:", generateKeyboard(keyboard));
+  }
+
+  // ------------------- اختيار الدولة -------------------
+  if (data.startsWith("country_")) {
+    const [_, app, country] = data.split("_");
+    const from_id = chatId; // نستخدم Telegram ID كمفتاح
+
+    const { raw, number } = await provider.getNumber(from_id, country, app);
+
+    const prices = await provider.getPrices();
+    const price = prices[country]?.[app] || 0;
+
+    const { data: user } = await supabase
       .from("users")
       .select("*")
-      .eq("telegram_id", telegramId)
+      .eq("telegram_id", chatId)
       .single();
 
-    if (!user) {
-      const { data: newUser } = await supabase
-        .from("users")
-        .insert({
-          telegram_id: telegramId,
-          username: username
-        })
-        .select()
-        .single();
+    // حفظ الطلب
+    await supabase.from("orders").insert({
+      user_id: user.id,
+      number,
+      country,
+      app_code: app,
+      status: "waiting",
+      created_at: new Date()
+    });
 
-      return newUser;
-    }
+    const text = `☑️︙تم شراء رقم جديد بنجاح\n\n` +
+      `🌐︙الدولة: ${country}\n` +
+      `🕹︙التطبيق: ${app}\n` +
+      `☎️︙الرقم: ${number}\n` +
+      `💵︙السعر: ${price} ريال يمني\n\n` +
+      `🎲︙يمكنك تغيير الرقم أو طلب الكود عند وصول الرسالة`;
 
-    return user;
-  }
-
-  async function isAdmin(telegramId) {
-    const { data } = await supabase
-      .from("users")
-      .select("is_admin")
-      .eq("telegram_id", telegramId)
-      .single();
-
-    return data?.is_admin === true;
-  }
-
-  /* ================== إجبار الاشتراك ================== */
-
-  async function checkSubscription(userId) {
-    const { data: channels } = await supabase
-      .from("channels")
-      .select("*")
-      .eq("is_active", true);
-
-    if (!channels || channels.length === 0) return true;
-
-    for (let ch of channels) {
-      try {
-        const member = await bot.getChatMember(ch.link, userId);
-        if (member.status === "left") return false;
-      } catch {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  /* ================== القائمة الرئيسية ================== */
-
-  async function mainMenu(chatId) {
-    const user = await getUser(chatId);
-
-    const buttons = [
-      [{ text: "📱 شراء رقم مجاني", callback_data: "free_number" }],
-      [{ text: "💎 أرقام مدفوعة", callback_data: "paid_numbers" }],
-      [{ text: "💰 رصيدي", callback_data: "balance" }],
-      [{ text: "📦 طلباتي", callback_data: "orders" }]
+    const keyboard = [
+      { text: "تغيير الرقم 🔄", data: `country_${app}_${country}` },
+      { text: "طلب الكود 📨", data: `get_code_${number}` },
+      { text: "العودة ↩️", data: "choose_app" },
+      { text: "القائمة الرئيسية 🏠", data: "main_menu" }
     ];
 
-    if (await isAdmin(chatId)) {
-      buttons.push([{ text: "🔐 لوحة التحكم", callback_data: "admin" }]);
-    }
-
-    bot.sendMessage(chatId,
-      `👋 مرحباً\n💰 رصيدك: ${user.balance}\n📊 الحد اليومي: ${user.daily_limit}`,
-      inline(buttons)
-    );
+    return bot.sendMessage(chatId, text, generateKeyboard(keyboard));
   }
 
-  /* ================== START ================== */
+  // ------------------- طلب الكود -------------------
+  if (data.startsWith("get_code_")) {
+    const number = data.replace("get_code_", "");
+    const sms = await provider.getSms(chatId, number);
+    return bot.sendMessage(chatId, `✉️︙الرسالة:\n${sms}`);
+  }
 
-  bot.onText(/\/start/, async (msg) => {
-    const chatId = msg.chat.id;
+  // ------------------- الدعم -------------------
+  if (data === "support") return bot.sendMessage(chatId, "للدعم: @abdullah_aishan");
 
-    const subscribed = await checkSubscription(chatId);
-    if (!subscribed) {
-      return bot.sendMessage(chatId,
-        "🚫 يجب الاشتراك بالقنوات أولاً");
-    }
+  // ------------------- API -------------------
+  if (data === "api_section") return bot.sendMessage(chatId, "قسم API سيتم تطويره لاحقًا.");
 
-    await mainMenu(chatId);
-  });
+  bot.answerCallbackQuery(query.id);
+});
 
-  /* ================== Callbacks ================== */
-
-  bot.on("callback_query", async (q) => {
-    const chatId = q.message.chat.id;
-    const data = q.data;
-
-    await bot.answerCallbackQuery(q.id);
-
-    /* ==== رصيد ==== */
-    if (data === "balance") {
-      const user = await getUser(chatId);
-      return bot.sendMessage(chatId,
-        `💰 رصيدك الحالي: ${user.balance}`);
-    }
-
-    /* ==== أرقام مجانية ==== */
-    if (data === "free_number") {
-
-      const user = await getUser(chatId);
-
-      if (user.daily_limit <= 0)
-        return bot.sendMessage(chatId,
-          "❌ انتهى حدك اليومي");
-
-      const number = await provider.getNumber();
-
-      if (!number)
-        return bot.sendMessage(chatId,
-          "❌ لا يوجد أرقام حالياً");
-
-      await supabase.from("orders").insert({
-        user_id: user.id,
-        number: number,
-        status: "waiting"
-      });
-
-      await supabase.from("users")
-        .update({ daily_limit: user.daily_limit - 1 })
-        .eq("id", user.id);
-
-      return bot.sendMessage(chatId,
-        `📱 رقمك:\n${number}`);
-    }
-
-    /* ==== أرقام مدفوعة ==== */
-    if (data === "paid_numbers") {
-      const { data: numbers } = await supabase
-        .from("paid_numbers")
-        .select("*")
-        .eq("is_active", true);
-
-      if (!numbers || numbers.length === 0)
-        return bot.sendMessage(chatId,
-          "❌ لا يوجد أرقام مدفوعة");
-
-      const buttons = numbers.map(n => [{
-        text: `${n.number} - ${n.price}$`,
-        callback_data: `buy_paid_${n.id}`
-      }]);
-
-      return bot.sendMessage(chatId,
-        "💎 اختر رقم:",
-        inline(buttons));
-    }
-
-    if (data.startsWith("buy_paid_")) {
-      const id = data.split("_")[2];
-
-      const { data: number } = await supabase
-        .from("paid_numbers")
-        .select("*")
-        .eq("id", id)
-        .single();
-
-      const user = await getUser(chatId);
-
-      if (user.balance < number.price)
-        return bot.sendMessage(chatId,
-          "❌ رصيد غير كافي");
-
-      await supabase.from("users")
-        .update({ balance: user.balance - number.price })
-        .eq("id", user.id);
-
-      await supabase.from("paid_numbers")
-        .update({ is_active: false })
-        .eq("id", id);
-
-      return bot.sendMessage(chatId,
-        `✅ تم شراء الرقم:\n${number.number}`);
-    }
-
-    /* ==== لوحة تحكم الأدمن ==== */
-    if (data === "admin") {
-      if (!(await isAdmin(chatId)))
-        return bot.sendMessage(chatId, "❌ غير مصرح");
-
-      return bot.sendMessage(chatId,
-        "🔐 لوحة التحكم",
-        inline([
-          [{ text: "➕ إضافة رقم مدفوع", callback_data: "add_paid" }]
-        ])
-      );
-    }
-
-  });
-
-};
+module.exports = bot;
