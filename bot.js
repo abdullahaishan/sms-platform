@@ -1,129 +1,214 @@
-const TelegramBot = require("node-telegram-bot-api");
 const supabase = require("./db");
 const provider = require("./provider");
-const axios = require("axios");
 
 module.exports = (bot) => {
-  console.log("🤖 Bot module loaded successfully");
 
-  /* ==================== دوال مساعدة ==================== */
-  function createInlineKeyboard(buttons, columns = 2) {
-    const keyboard = [];
-    let row = [];
-    buttons.forEach((b, i) => {
-      row.push({ text: b.text, callback_data: b.data });
-      if (row.length === columns || i === buttons.length - 1) {
-        keyboard.push(row);
-        row = [];
+  /* ================== أدوات مساعدة ================== */
+
+  function inline(buttons) {
+    return {
+      reply_markup: {
+        inline_keyboard: buttons
       }
-    });
-    return { reply_markup: { inline_keyboard: keyboard } };
+    };
   }
 
-  async function checkUserBalance(chatId) {
-    try {
-      const { data, error } = await supabase.from("users").select("balance").eq("telegram_id", chatId).single();
-      if (error) return 0;
-      return data?.balance || 0;
-    } catch { return 0; }
-  }
+  async function getUser(telegramId, username) {
+    let { data: user } = await supabase
+      .from("users")
+      .select("*")
+      .eq("telegram_id", telegramId)
+      .single();
 
-  async function updateUserBalance(chatId, amount) {
-    try {
-      await supabase.from("users").update({ balance: amount }).eq("telegram_id", chatId);
-    } catch (err) { console.error("Error updating balance:", err); }
-  }
+    if (!user) {
+      const { data: newUser } = await supabase
+        .from("users")
+        .insert({
+          telegram_id: telegramId,
+          username: username
+        })
+        .select()
+        .single();
 
-  async function getOrCreateUser(chatId, username, firstName) {
-    try {
-      const { data: existingUser } = await supabase.from("users").select("*").eq("telegram_id", chatId).single();
-      if (existingUser) {
-        await supabase.from("users").update({ last_active: new Date().toISOString(), username: username || existingUser.username }).eq("telegram_id", chatId);
-        return existingUser;
-      }
-      const { data: newUser, error } = await supabase.from("users").insert({
-        telegram_id: chatId,
-        username,
-        first_name: firstName,
-        balance: 0,
-        created_at: new Date().toISOString(),
-        last_active: new Date().toISOString()
-      }).select().single();
-      if (error) throw error;
       return newUser;
-    } catch (err) { console.error("Error in getOrCreateUser:", err); return null; }
-  }
-
-  // دالة تحقق من صلاحية الأدمن
-  async function isAdmin(chatId) {
-    if (process.env.ADMIN_IDS) {
-      const ids = process.env.ADMIN_IDS.split(",").map(x => x.trim());
-      if (ids.includes(String(chatId))) return true;
     }
-    try {
-      const { data } = await supabase.from("users").select("is_admin").eq("telegram_id", chatId).single();
-      return data?.is_admin === true;
-    } catch (err) { console.error("isAdmin check error:", err.message); return false; }
+
+    return user;
   }
 
-  /* ==================== القائمة الرئيسية ==================== */
-  async function showMainMenu(chatId, firstName = "المستخدم") {
-    const balance = await checkUserBalance(chatId);
-    const message = `👋 *مرحباً ${firstName}*\n💰 *رصيدك:* ${balance} نقطة\n🆔 *رقمك:* ${chatId}\n*اختر من القائمة:*`;
-    const keyboard = createInlineKeyboard([
-      { text: "📱 شراء رقم", data: "buy_number" },
-      { text: "💰 رصيدي", data: "my_balance" },
-      { text: "📊 المخزون", data: "check_stock" },
-      { text: "📋 طلباتي", data: "my_orders" },
-      { text: "🆘 المساعدة", data: "help_menu" },
-      { text: "👨‍💻 الدعم", data: "support" }
-    ], 2);
-    await bot.sendMessage(chatId, message, { parse_mode: "Markdown", ...keyboard });
+  async function isAdmin(telegramId) {
+    const { data } = await supabase
+      .from("users")
+      .select("is_admin")
+      .eq("telegram_id", telegramId)
+      .single();
+
+    return data?.is_admin === true;
   }
 
-  /* ==================== أوامر أساسية ==================== */
+  /* ================== إجبار الاشتراك ================== */
+
+  async function checkSubscription(userId) {
+    const { data: channels } = await supabase
+      .from("channels")
+      .select("*")
+      .eq("is_active", true);
+
+    if (!channels || channels.length === 0) return true;
+
+    for (let ch of channels) {
+      try {
+        const member = await bot.getChatMember(ch.link, userId);
+        if (member.status === "left") return false;
+      } catch {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /* ================== القائمة الرئيسية ================== */
+
+  async function mainMenu(chatId) {
+    const user = await getUser(chatId);
+
+    const buttons = [
+      [{ text: "📱 شراء رقم مجاني", callback_data: "free_number" }],
+      [{ text: "💎 أرقام مدفوعة", callback_data: "paid_numbers" }],
+      [{ text: "💰 رصيدي", callback_data: "balance" }],
+      [{ text: "📦 طلباتي", callback_data: "orders" }]
+    ];
+
+    if (await isAdmin(chatId)) {
+      buttons.push([{ text: "🔐 لوحة التحكم", callback_data: "admin" }]);
+    }
+
+    bot.sendMessage(chatId,
+      `👋 مرحباً\n💰 رصيدك: ${user.balance}\n📊 الحد اليومي: ${user.daily_limit}`,
+      inline(buttons)
+    );
+  }
+
+  /* ================== START ================== */
+
   bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
-    const username = msg.from.username;
-    const firstName = msg.from.first_name || "المستخدم";
-    console.log(`📥 New user: ${chatId} (${username})`);
-    await getOrCreateUser(chatId, username, firstName);
-    await showMainMenu(chatId, firstName);
+
+    const subscribed = await checkSubscription(chatId);
+    if (!subscribed) {
+      return bot.sendMessage(chatId,
+        "🚫 يجب الاشتراك بالقنوات أولاً");
+    }
+
+    await mainMenu(chatId);
   });
 
-  bot.onText(/\/menu/, async (msg) => { await showMainMenu(msg.chat.id, msg.from.first_name); });
-  bot.onText(/\/balance/, async (msg) => {
-    const chatId = msg.chat.id;
-    const balance = await checkUserBalance(chatId);
-    await bot.sendMessage(chatId, `💰 رصيدك: ${balance} نقطة\n🆔 رقمك: ${chatId}`, { parse_mode: "Markdown" });
-  });
-  
-  // يمكن دمج باقي أوامر الشراء /sms /stock /orders كما في كودك الأصلي، مع التأكد من استخدام isAdmin عند الوظائف الإدارية
+  /* ================== Callbacks ================== */
 
-  /* ==================== معالجة Callbacks ==================== */
-  bot.on("callback_query", async (callbackQuery) => {
-    const chatId = callbackQuery.message.chat.id;
-    const messageId = callbackQuery.message.message_id;
-    const data = callbackQuery.data;
-    await bot.answerCallbackQuery(callbackQuery.id);
-    try {
-      if (data === "main_menu") { await bot.deleteMessage(chatId, messageId); await showMainMenu(chatId); return; }
-      // مثال: حماية خيار إضافة أرقام مدفوعة
-      if (data === "add_paid_number") {
-        if (!await isAdmin(chatId)) return bot.sendMessage(chatId, "❌ هذه الخاصية للأدمن فقط");
-        await bot.sendMessage(chatId, "✅ يمكن الآن إضافة رقم مدفوع");
-        return;
-      }
-      // باقي الأحداث مثل buy_number / choose_app / purchase_... تظل كما هي
-    } catch (err) { console.error("Callback error:", err); }
+  bot.on("callback_query", async (q) => {
+    const chatId = q.message.chat.id;
+    const data = q.data;
+
+    await bot.answerCallbackQuery(q.id);
+
+    /* ==== رصيد ==== */
+    if (data === "balance") {
+      const user = await getUser(chatId);
+      return bot.sendMessage(chatId,
+        `💰 رصيدك الحالي: ${user.balance}`);
+    }
+
+    /* ==== أرقام مجانية ==== */
+    if (data === "free_number") {
+
+      const user = await getUser(chatId);
+
+      if (user.daily_limit <= 0)
+        return bot.sendMessage(chatId,
+          "❌ انتهى حدك اليومي");
+
+      const number = await provider.getNumber();
+
+      if (!number)
+        return bot.sendMessage(chatId,
+          "❌ لا يوجد أرقام حالياً");
+
+      await supabase.from("orders").insert({
+        user_id: user.id,
+        number: number,
+        status: "waiting"
+      });
+
+      await supabase.from("users")
+        .update({ daily_limit: user.daily_limit - 1 })
+        .eq("id", user.id);
+
+      return bot.sendMessage(chatId,
+        `📱 رقمك:\n${number}`);
+    }
+
+    /* ==== أرقام مدفوعة ==== */
+    if (data === "paid_numbers") {
+      const { data: numbers } = await supabase
+        .from("paid_numbers")
+        .select("*")
+        .eq("is_active", true);
+
+      if (!numbers || numbers.length === 0)
+        return bot.sendMessage(chatId,
+          "❌ لا يوجد أرقام مدفوعة");
+
+      const buttons = numbers.map(n => [{
+        text: `${n.number} - ${n.price}$`,
+        callback_data: `buy_paid_${n.id}`
+      }]);
+
+      return bot.sendMessage(chatId,
+        "💎 اختر رقم:",
+        inline(buttons));
+    }
+
+    if (data.startsWith("buy_paid_")) {
+      const id = data.split("_")[2];
+
+      const { data: number } = await supabase
+        .from("paid_numbers")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      const user = await getUser(chatId);
+
+      if (user.balance < number.price)
+        return bot.sendMessage(chatId,
+          "❌ رصيد غير كافي");
+
+      await supabase.from("users")
+        .update({ balance: user.balance - number.price })
+        .eq("id", user.id);
+
+      await supabase.from("paid_numbers")
+        .update({ is_active: false })
+        .eq("id", id);
+
+      return bot.sendMessage(chatId,
+        `✅ تم شراء الرقم:\n${number.number}`);
+    }
+
+    /* ==== لوحة تحكم الأدمن ==== */
+    if (data === "admin") {
+      if (!(await isAdmin(chatId)))
+        return bot.sendMessage(chatId, "❌ غير مصرح");
+
+      return bot.sendMessage(chatId,
+        "🔐 لوحة التحكم",
+        inline([
+          [{ text: "➕ إضافة رقم مدفوع", callback_data: "add_paid" }]
+        ])
+      );
+    }
+
   });
 
-  /* ==================== إشعارات وإحصائيات ==================== */
-  setTimeout(async () => {
-    try {
-      const { count: usersCount } = await supabase.from("users").select("*", { count: "exact", head: true });
-      const { count: ordersCount } = await supabase.from("orders").select("*", { count: "exact", head: true });
-      console.log(`📊 إحصائيات: المستخدمين=${usersCount}, الطلبات=${ordersCount}`);
-    } catch (err) { console.error("Error in startup stats:", err); }
-  }, 5000);
 };
