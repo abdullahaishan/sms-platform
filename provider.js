@@ -1,110 +1,63 @@
 const axios = require("axios");
 
-const BASE_URL = "https://numbros.shop/jj";
+const BASE_URL = process.env.PROVIDER_URL; // https://numbros.shop/jj/tele
 const KEY = process.env.PROVIDER_KEY;
 
-// ------------------- GET COUNTRIES -------------------
-async function getCountries(appCode) {
+// جلب الدول المتاحة لأي تطبيق
+async function getCountries(app, from_id) {
   try {
-    const res = await axios.get(`${BASE_URL}/countries.json`);
-    const countriesObj = res.data;
+    // رابط الدول الرسمي
+    const res = await axios.get(`${process.env.PROVIDER_URL.replace('/tele','')}/countries.json`);
+    const countriesData = res.data;
 
-    // تحويل object إلى array
-    const countriesList = Object.keys(countriesObj).map(key => ({
+    // بناء مصفوفة تحتوي اسم الدولة والكود وحالة الأرقام المتوفرة
+    const countries = Object.keys(countriesData).map(key => ({
       key,
-      name: countriesObj[key]
+      name: countriesData[key],
+      available: "متوفر" // مؤقت، لاحقًا يمكن التحديث بعد جلب الأرقام المتاحة
     }));
 
-    // الآن نتحقق من توفر الأرقام لكل دولة (بالتطبيق)
-    const availableCountries = [];
-
-    for (let country of countriesList) {
-      try {
-        // جلب ملف الأرقام، نحاول حسب التطبيق
-        const numbersUrl = `${BASE_URL}/numbers/${appCode}/${country.key}.txt`;
-        const numbersRes = await axios.get(numbersUrl);
-
-        // إذا كانت الاستجابة ليست خطأ وتحتوي على نص غير فارغ
-        if (numbersRes.data && numbersRes.data.trim().length > 0) {
-          // نحسب عدد الأرقام (كل سطر رقم)
-          const count = numbersRes.data
-            .trim()
-            .split("\n")
-            .filter(n => n.trim().length > 0).length;
-
-          availableCountries.push({
-            key: country.key,
-            name: country.name,
-            available: count
-          });
-        }
-      } catch (err) {
-        // لا نفعل شيء إذا لم يفتح الملف → لا توجد أرقام
-      }
-    }
-
-    return availableCountries;
+    return countries;
   } catch (err) {
     console.log("Error fetching countries:", err.message);
     return [];
   }
 }
 
-// ------------------- GET NUMBER -------------------
-async function getNumber(country, app) {
+// طلب رقم جديد
+async function getNumber(app, countryKey, from_id) {
   try {
-    const res = await axios.get(`${BASE_URL}/tele/GetNumber.php`, {
-      params: {
-        key: KEY,
-        country,
-        app
-      }
-    });
-    return res.data.number || res.data; // بعض الأحيان الاستجابة تحتوي على {number: "123"}
+    const url = `${BASE_URL}/GetNumber.php?key=${KEY}&from_id=${from_id}&country=${countryKey}&app=${app}`;
+    const res = await axios.get(url);
+    return res.data; // عادة يرجع الرقم مباشرة
   } catch (err) {
     console.log("Error fetching number:", err.message);
-    throw err;
+    return null;
   }
 }
 
-// ------------------- GET SMS -------------------
-async function getSms(number) {
+// استلام الرسائل للكود
+async function getSms(number, from_id) {
   try {
-    const res = await axios.get(`${BASE_URL}/tele/GetSms.php`, {
-      params: {
-        key: KEY,
-        number
-      }
-    });
-    return res.data.sms || res.data; // بعض الأحيان الاستجابة تحتوي على {sms: "1234"}
+    const url = `${BASE_URL}/GetSms.php?key=${KEY}&from_id=${from_id}&number=${number}`;
+    const res = await axios.get(url);
+    return res.data; // الرسالة النصية
   } catch (err) {
     console.log("Error fetching SMS:", err.message);
-    throw err;
+    return "لم يتم استلام الرسالة بعد";
   }
 }
 
-// ------------------- GET BALANCE -------------------
-async function getBalance() {
+// معرفة الرصيد
+async function getBalance(from_id) {
   try {
-    const res = await axios.get(`${BASE_URL}/tele/GetBalance.php`, {
-      params: { key: KEY }
-    });
-    return res.data.balance || res.data; // {balance: 100} أو عدد مباشر
+    const url = `${BASE_URL}/GetBalance.php?key=${KEY}&from_id=${from_id}`;
+    const res = await axios.get(url);
+    return res.data;
   } catch (err) {
     console.log("Error fetching balance:", err.message);
-    throw err;
+    return 0;
   }
 }
 
-// ------------------- GET PRICES (OPTIONAL) -------------------
-async function getPrices() {
-  try {
-    const res = await axios.get(`${BASE_URL}/prices.json`);
-    return res.data; // { PH: { whatsapp: 10, telegram: 8 }, US: { whatsapp: 12 } }
-  } catch (err) {
-    console.log("Error fetching prices:", err.message);
-    return {};
-  }
-}
-
-module.exports = { getCountries, getNumber, getSms, getBalance, getPrices };
+module.exports = { getCountries, getNumber, getSms, getBalance };
