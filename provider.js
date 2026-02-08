@@ -1,44 +1,34 @@
 const axios = require("axios");
 
-// جلب الدول التي تحتوي على أرقام فعلية
+// جلب الدول التي تحتوي أرقام فعلية
 async function getCountries(app) {
   try {
-    // قراءة ملف countries.json
-    const countriesRes = await axios.get("https://numbros.shop/jj/countries.json");
-    const countriesObj = countriesRes.data;
+    const res = await axios.get("https://numbros.shop/jj/countries.json");
+    const obj = res.data;
 
-    const availableCountries = [];
+    const countries = [];
 
-    // تحويل object → array والتحقق من الأرقام الفعلية
-    for (const countryKey in countriesObj) {
+    for (const key in obj) {
       try {
-        const txtUrl = `https://numbros.shop/jj/numbers/${app}/${countryKey}.txt`;
+        const txtUrl = `https://numbros.shop/jj/numbers/${app}/${key}.txt`;
         const txtRes = await axios.get(txtUrl);
+        const txt = txtRes.data.trim();
 
-        const textData = txtRes.data.trim();
-        if (textData.length > 0) {
-          const lines = textData.split("\n").filter(n => n.trim().length > 0);
-          const count = lines.length;
-
-          availableCountries.push({
-            key: countryKey,
-            name: countriesObj[countryKey],
-            available: count
-          });
+        if (txt.length > 0) {
+          const count = txt.split("\n").filter(n => n.trim()).length;
+          countries.push({ key, name: obj[key], available: count });
         }
-      } catch (_) {
-        // تجاهل الدول التي لا تحتوي على ملف أو بها خطأ
-      }
+      } catch {}
     }
 
-    return availableCountries;
+    return countries;
   } catch (err) {
     console.error("Error getCountries:", err.message);
     return [];
   }
 }
 
-// طلب رقم جديد من المزود القديم
+// طلب رقم جديد
 async function getNumber(app, countryKey, from_id) {
   try {
     const url = `https://numbros.shop/jj/tele/GetNumber.php?key=${process.env.PROVIDER_KEY}&from_id=${from_id}&country=${countryKey}&app=${app}`;
@@ -50,7 +40,7 @@ async function getNumber(app, countryKey, from_id) {
   }
 }
 
-// الحصول على رسالة SMS لنفس الرقم
+// استلام الرسائل (الكود)
 async function getSms(number, from_id) {
   try {
     const url = `https://numbros.shop/jj/tele/GetSms.php?key=${process.env.PROVIDER_KEY}&from_id=${from_id}&number=${number}`;
@@ -58,11 +48,11 @@ async function getSms(number, from_id) {
     return res.data;
   } catch (err) {
     console.error("Error getSms:", err.message);
-    return null;
+    return "";
   }
 }
 
-// جلب الرصيد إذا احتجت
+// جلب الرصيد من المزود
 async function getBalance(from_id) {
   try {
     const url = `https://numbros.shop/jj/tele/GetBalance.php?key=${process.env.PROVIDER_KEY}&from_id=${from_id}`;
@@ -70,7 +60,7 @@ async function getBalance(from_id) {
     return res.data;
   } catch (err) {
     console.error("Error getBalance:", err.message);
-    return null;
+    return 0;
   }
 }
 
