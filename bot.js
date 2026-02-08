@@ -1,15 +1,12 @@
 const TelegramBot = require("node-telegram-bot-api");
-const supabase = require("./db"); // اتصال Supabase
+const supabase = require("./db"); // قاعدة البيانات الجديدة
 const provider = require("./provider"); // المزود القديم
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 // ------------------- HELPER FUNCTIONS -------------------
 async function checkSubscriptions(chatId) {
-  const { data: channels } = await supabase
-    .from("channels")
-    .select("*");
-
+  const { data: channels } = await supabase.from("channels").select("*");
   const notJoined = [];
   for (let channel of channels) {
     try {
@@ -18,7 +15,7 @@ async function checkSubscriptions(chatId) {
         notJoined.push(channel);
       }
     } catch (err) {
-      console.log("Error checking subscription:", err);
+      console.log("Error checking subscription:", err.message);
     }
   }
   return notJoined;
@@ -32,7 +29,7 @@ function generateKeyboard(options) {
   };
 }
 
-// ------------------- START -------------------
+// ------------------- START COMMAND -------------------
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
@@ -43,9 +40,10 @@ bot.onText(/\/start/, async (msg) => {
   });
 
   const notJoined = await checkSubscriptions(chatId);
+
   if (notJoined.length > 0) {
-    let text = `👋︙مرحباً بك ${msg.from.first_name}\n\n`;
-    text += `☑️︙يجب عليك الإشتراك بالقنوات التالية:\n`;
+    let text = `👋︙مرحباً بك ${msg.from.first_name}\n\n` +
+               `☑️︙يجب عليك الإشتراك بالقنوات التالية لتتمكن من استعمال البوت:\n`;
     for (let ch of notJoined) text += `• ${ch.name}: ${ch.link}\n`;
 
     return bot.sendMessage(chatId, text, generateKeyboard([{ text: "تحقق من انضمامي ✅", data: "check_channels" }]));
@@ -56,16 +54,12 @@ bot.onText(/\/start/, async (msg) => {
 
 // ------------------- MAIN MENU -------------------
 async function sendMainMenu(chatId) {
-  const { data: user } = await supabase
-    .from("users")
-    .select("*")
-    .eq("telegram_id", chatId)
-    .single();
+  const { data: user } = await supabase.from("users").select("*").eq("telegram_id", chatId).single();
 
-  const text = `👋︙مرحباً بك في بوت الأرقام المجانية 📲\n\n` +
-    `💰︙رصيدك : ${user.balance || 0} ريال يمني\n` +
-    `🎛︙رقم حسابك : ${chatId}\n\n` +
-    `🤖︙دعم البوت : @abdullah_aishan`;
+  const text = `👋︙مرحباً بك في بوت خدمات مجانية | Free Number 📲\n\n` +
+               `💰︙رصيدك : ${user?.balance || 0} ريال يمني\n` +
+               `🎛︙رقم حسابك : ${chatId}\n\n` +
+               `🤖︙دعم البوت : @abdullah_aishan`;
 
   const keyboard = [
     { text: "اختيار الرقم 📱", data: "choose_app" },
@@ -77,11 +71,14 @@ async function sendMainMenu(chatId) {
   bot.sendMessage(chatId, text, generateKeyboard(keyboard));
 }
 
-// ------------------- CALLBACK -------------------
+// ------------------- CALLBACK HANDLER -------------------
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
 
+  await bot.answerCallbackQuery(query.id); // مهم جداً
+
+  // ------------------- CHECK CHANNELS -------------------
   if (data === "check_channels") {
     const notJoined = await checkSubscriptions(chatId);
     if (notJoined.length > 0) {
@@ -92,66 +89,72 @@ bot.on("callback_query", async (query) => {
     return sendMainMenu(chatId);
   }
 
+  // ------------------- MAIN MENU -------------------
   if (data === "main_menu") return sendMainMenu(chatId);
 
-  // ------------------- اختيار التطبيق -------------------
+  // ------------------- CHOOSE APP -------------------
   if (data === "choose_app") {
-    const apps = await provider.getAppMap();
-    const keyboard = Object.entries(apps).map(([key, name]) => ({ text: name, data: `app_${key}` }));
-    keyboard.push({ text: "العودة ↩️", data: "main_menu" });
-    return bot.sendMessage(chatId, "🤖︙اختر التطبيق:", generateKeyboard(keyboard));
+    const text = `🤖︙اختر التطبيق:`;
+    const keyboard = [
+      { text: "واتساب 📱", data: "app_whatsapp" },
+      { text: "تليجرام ✈️", data: "app_telegram" },
+      { text: "فيسبوك 📘", data: "app_facebook" },
+      { text: "العودة ↩️", data: "main_menu" }
+    ];
+    return bot.sendMessage(chatId, text, generateKeyboard(keyboard));
   }
 
-  // ------------------- اختيار التطبيق المحدد -------------------
+  // ------------------- SELECT APP -------------------
   if (data.startsWith("app_")) {
-    const app = data.split("_")[1];
-    const countries = await provider.getCountries();
-    const prices = await provider.getPrices();
+    const app = data.split("_")[1]; // whatsapp / telegram / facebook
+    let countries = [];
+    try {
+      countries = await provider.getCountries(app); // يجب أن تعيد [{key, name, available}]
+    } catch (err) {
+      console.log("Error fetching countries:", err.message);
+      return bot.sendMessage(chatId, "❌ حدث خطأ عند جلب الدول.");
+    }
 
-    const keyboard = countries.map(c => {
-      const price = prices[c.key]?.[app] || 0;
-      return { text: `${c.name} (${c.available} متوفر) - ${price} ريال`, data: `country_${app}_${c.key}` };
-    });
-
+    const text = `🌍︙اختر الدولة لطلب الرقم:`;
+    const keyboard = countries.map(c => ({ text: `${c.name} (${c.available})`, data: `country_${app}_${c.key}` }));
     keyboard.push({ text: "العودة ↩️", data: "choose_app" });
-    return bot.sendMessage(chatId, "🌍︙اختر الدولة لطلب الرقم:", generateKeyboard(keyboard));
+
+    return bot.sendMessage(chatId, text, generateKeyboard(keyboard));
   }
 
-  // ------------------- اختيار الدولة -------------------
+  // ------------------- SELECT COUNTRY -------------------
   if (data.startsWith("country_")) {
-    const [_, app, country] = data.split("_");
-    const from_id = chatId; // نستخدم Telegram ID كمفتاح
+    const parts = data.split("_");
+    const app = parts[1];
+    const countryKey = parts[2];
 
-    const { raw, number } = await provider.getNumber(from_id, country, app);
+    let number;
+    try {
+      number = await provider.getNumber(countryKey, app);
+    } catch (err) {
+      console.log("Error fetching number:", err.message);
+      return bot.sendMessage(chatId, "❌ حدث خطأ عند طلب الرقم.");
+    }
 
-    const prices = await provider.getPrices();
-    const price = prices[country]?.[app] || 0;
-
-    const { data: user } = await supabase
-      .from("users")
-      .select("*")
-      .eq("telegram_id", chatId)
-      .single();
-
-    // حفظ الطلب
+    // حفظ الطلب بالقاعدة الجديدة (تاريخ فقط)
+    const { data: user } = await supabase.from("users").select("*").eq("telegram_id", chatId).single();
     await supabase.from("orders").insert({
       user_id: user.id,
       number,
-      country,
+      country: countryKey,
       app_code: app,
-      status: "waiting",
-      created_at: new Date()
+      status: "waiting"
     });
 
     const text = `☑️︙تم شراء رقم جديد بنجاح\n\n` +
-      `🌐︙الدولة: ${country}\n` +
-      `🕹︙التطبيق: ${app}\n` +
-      `☎️︙الرقم: ${number}\n` +
-      `💵︙السعر: ${price} ريال يمني\n\n` +
-      `🎲︙يمكنك تغيير الرقم أو طلب الكود عند وصول الرسالة`;
+                 `🌐︙الدولة: ${countryKey}\n` +
+                 `🕹︙التطبيق: ${app}\n` +
+                 `☎️︙الرقم: ${number}\n` +
+                 `💵︙السعر: 0 ريال يمني\n` +
+                 `🎲︙قم بطلب الكود وانتظر دقيقتين ثم انقر على (طلب الكود)`;
 
     const keyboard = [
-      { text: "تغيير الرقم 🔄", data: `country_${app}_${country}` },
+      { text: "تغيير الرقم 🔄", data: `country_${app}_${countryKey}` },
       { text: "طلب الكود 📨", data: `get_code_${number}` },
       { text: "العودة ↩️", data: "choose_app" },
       { text: "القائمة الرئيسية 🏠", data: "main_menu" }
@@ -160,20 +163,25 @@ bot.on("callback_query", async (query) => {
     return bot.sendMessage(chatId, text, generateKeyboard(keyboard));
   }
 
-  // ------------------- طلب الكود -------------------
+  // ------------------- GET CODE -------------------
   if (data.startsWith("get_code_")) {
     const number = data.replace("get_code_", "");
-    const sms = await provider.getSms(chatId, number);
+    let sms;
+    try {
+      sms = await provider.getSms(number);
+    } catch (err) {
+      console.log("Error fetching SMS:", err.message);
+      return bot.sendMessage(chatId, "❌ حدث خطأ عند جلب الرسالة.");
+    }
     return bot.sendMessage(chatId, `✉️︙الرسالة:\n${sms}`);
   }
 
-  // ------------------- الدعم -------------------
+  // ------------------- SUPPORT -------------------
   if (data === "support") return bot.sendMessage(chatId, "للدعم: @abdullah_aishan");
 
-  // ------------------- API -------------------
+  // ------------------- API SECTION -------------------
   if (data === "api_section") return bot.sendMessage(chatId, "قسم API سيتم تطويره لاحقًا.");
 
-  bot.answerCallbackQuery(query.id);
 });
 
 module.exports = bot;
